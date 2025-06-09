@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 sqlalchemy==2.0.23
@@ -12,4 +13,7 @@ stripe==8.7.0
 httpx==0.25.2
 asyncio-mqtt==0.16.1
 python-dotenv==1.0.0
+=======
+stripe==7.8.0
+>>>>>>> 4cefefed37efe58fc4ca76864c3bb7ffc43161e4
 
