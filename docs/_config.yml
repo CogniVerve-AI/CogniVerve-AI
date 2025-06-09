@@ -1,0 +1,19 @@
+title: CogniVerve-AI Documentation
+description: Open-source AI agent platform documentation
+theme: minima
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+
+markdown: kramdown
+highlighter: rouge
+
+navigation:
+  - title: Home
+    url: /
+  - title: Getting Started
+    url: /user-guide/getting-started
+  - title: API Reference
+    url: /api/
+  - title: Deployment
+    url: /deployment/
