@@ -1,0 +1,269 @@
+name: Deploy CogniVerve-AI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # Security and Quality Checks
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Backend Testing and Building
+  backend-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio
+    
+    - name: Lint with flake8
+      run: |
+        cd backend
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Type check with mypy
+      run: |
+        cd backend
+        pip install mypy
+        mypy app --ignore-missing-imports || true
+    
+    - name: Run tests
+      run: |
+        cd backend
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=html
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/0
+        SECRET_KEY: test-secret-key
+        ENVIRONMENT: testing
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+
+  # Frontend Testing and Building
+  frontend-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci --legacy-peer-deps
+    
+    - name: Lint with ESLint
+      run: |
+        cd frontend
+        npm run lint || true
+    
+    - name: Type check
+      run: |
+        cd frontend
+        npm run type-check || true
+    
+    - name: Run tests
+      run: |
+        cd frontend
+        npm test -- --coverage --watchAll=false
+    
+    - name: Build application
+      run: |
+        cd frontend
+        npm run build
+      env:
+        VITE_API_URL: https://api.cogniverve.ai
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: frontend-build
+        path: frontend/dist/
+        retention-days: 7
+
+  # Deploy to Staging (on PR)
+  deploy-staging:
+    needs: [security-scan, backend-test, frontend-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy Frontend to Vercel Preview
+      uses: amondnet/vercel-action@v25
+      with:
+        vercel-token: ${{ secrets.VERCEL_TOKEN }}
+        vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+        vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+        working-directory: ./frontend
+        scope: ${{ secrets.VERCEL_ORG_ID }}
+    
+    - name: Deploy Backend to Fly.io Staging
+      uses: superfly/flyctl-actions/setup-flyctl@master
+    - run: |
+        cd backend
+        echo "${{ secrets.FLY_API_TOKEN }}" | flyctl auth docker
+        flyctl deploy --app cogniverve-backend-staging --config fly.staging.toml
+
+  # Deploy to Production (on main push)
+  deploy-production:
+    needs: [security-scan, backend-test, frontend-test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    environment:
+      name: production
+      url: https://cogniverve.ai
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download frontend build
+      uses: actions/download-artifact@v3
+      with:
+        name: frontend-build
+        path: frontend/dist/
+    
+    - name: Deploy Frontend to Vercel Production
+      uses: amondnet/vercel-action@v25
+      with:
+        vercel-token: ${{ secrets.VERCEL_TOKEN }}
+        vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+        vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+        vercel-args: '--prod'
+        working-directory: ./frontend
+        scope: ${{ secrets.VERCEL_ORG_ID }}
+    
+    - name: Deploy Backend to Fly.io Production
+      uses: superfly/flyctl-actions/setup-flyctl@master
+    - run: |
+        cd backend
+        echo "${{ secrets.FLY_API_TOKEN }}" | flyctl auth docker
+        flyctl deploy --app cogniverve-backend-prod
+    
+    - name: Run Database Migrations
+      run: |
+        echo "${{ secrets.FLY_API_TOKEN }}" | flyctl auth docker
+        flyctl ssh console --app cogniverve-backend-prod --command "python -m alembic upgrade head"
+    
+    - name: Health Check
+      run: |
+        sleep 30
+        curl -f https://api.cogniverve.ai/health || exit 1
+        curl -f https://cogniverve.ai || exit 1
+    
+    - name: Notify Deployment Success
+      uses: 8398a7/action-slack@v3
+      if: success()
+      with:
+        status: success
+        text: '🚀 CogniVerve-AI deployed successfully to production!'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    
+    - name: Notify Deployment Failure
+      uses: 8398a7/action-slack@v3
+      if: failure()
+      with:
+        status: failure
+        text: '❌ CogniVerve-AI deployment failed!'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Performance Testing
+  performance-test:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Lighthouse CI
+      uses: treosh/lighthouse-ci-action@v10
+      with:
+        urls: |
+          https://cogniverve.ai
+        configPath: './lighthouserc.json'
+        uploadArtifacts: true
+        temporaryPublicStorage: true
+

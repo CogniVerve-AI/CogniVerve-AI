@@ -1,0 +1,37 @@
+# Fly.io configuration for staging backend
+app = "cogniverve-backend-staging"
+primary_region = "iad"
+
+[build]
+
+[env]
+  ENVIRONMENT = "staging"
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[http_service.checks]]
+  interval = "30s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+  protocol = "http"
+  timeout = "5s"
+  tls_skip_verify = false
+
+[http_service.concurrency]
+  type = "connections"
+  hard_limit = 10
+  soft_limit = 5
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
