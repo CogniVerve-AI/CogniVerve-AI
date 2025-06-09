@@ -40,11 +40,11 @@ CogniVerve-AI follows a modern microservices architecture:
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   React Frontend │    │  FastAPI Backend │    │   PostgreSQL    │
+│  React Frontend │    │ FastAPI Backend │    │   PostgreSQL    │
 │                 │◄──►│                 │◄──►│    Database     │
 │  • Dashboard    │    │  • REST API     │    │                 │
 │  • Agent UI     │    │  • WebSockets   │    │  • Users        │
-│  • Billing     │    │  • Auth         │    │  • Agents       │
+│  • Billing      │    │  • Auth         │    │  • Agents       │
 └─────────────────┘    └─────────────────┘    │  • Tasks        │
                                               └─────────────────┘
                               │
